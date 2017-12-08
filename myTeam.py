@@ -32,9 +32,10 @@ from util import nearestPoint
 
 #FIRST_AGENT = 'OffensiveReflexAgent'
 #FIRST_AGENT = 'HomogenousReflexAgent'
-#FIRST_AGENT = 'GreedyBustersAgent'
-FIRST_AGENT = 'MidfielderAgent'
-SECOND_AGENT = 'RefinedDefensiveReflexAgent'
+FIRST_AGENT = 'GreedyBustersAgent'
+#FIRST_AGENT = 'MidfielderAgent'
+#SECOND_AGENT = 'RefinedDefensiveReflexAgent'
+SECOND_AGENT = 'MidfielderAgent'
 #SECOND_AGENT = 'RefinedDefensiveReflexAgent'
 
 def createTeam(firstIndex, secondIndex, isRed,
@@ -71,6 +72,7 @@ class InferenceModule:
 				self.obs = [] # most recent observation position
 				self.beliefs = None
 				self.agent = currentAgent
+				self.observationDistributions = {}
 
 		def observeState(self, gameState):
 				"Collects the relevant noisy distance observation and pass it along."
@@ -80,20 +82,31 @@ class InferenceModule:
 				myPos = myState.getPosition()
 				enemies = [gameState.getAgentState(i) for i in self.agent.getOpponents(gameState)]
 				print self.agent.getOpponents(gameState)
-				print gameState.getAgentState(1)
-				distances = [self.agent.getMazeDistance(myPos, a.getPosition()) for a in enemies]
+				distances = list()
+
+				for a in enemies:
+					print a
+					distances.append(self.agent.getMazeDistance(myPos, a.getPosition()))
+
+				#distances = [self.agent.getMazeDistance(myPos, a.getPosition()) for a in enemies]
 
 				if len(distances) >= self.index: # Check for missing observations
 						obs = distances[self.index - 1]
 						self.obs = obs
 						self.observe(obs, gameState)
 
-		def getObservationDistribution(noisyDistance):
+		def getObservationDistribution(self, noisyDistance):
 				"""
 				Returns the factor P( noisyDistance | TrueDistances ), the likelihood of the provided noisyDistance
 				conditioned upon all the possible true distances that could have generated it.
 				"""
-				global observationDistributions
+				SONAR_NOISE_VALUES = capture.SONAR_NOISE_VALUES
+				SONAR_NOISE_RANGE = capture.SONAR_NOISE_RANGE
+				SONAR_MAX = (SONAR_NOISE_RANGE - 1)/2
+				SONAR_DENOMINATOR = 2 ** SONAR_MAX  + 2 ** (SONAR_MAX + 1) - 2.0
+				SONAR_NOISE_PROBS = [2 ** (SONAR_MAX-abs(v)) / SONAR_DENOMINATOR  for v in SONAR_NOISE_VALUES]
+
+				observationDistributions = self.observationDistributions
 				if noisyDistance == None:
 						return util.Counter()
 				if noisyDistance not in observationDistributions:
@@ -165,7 +178,7 @@ class ExactInference(InferenceModule):
 		def observe(self, observation, gameState):
 				noisyDistance = observation
 				emissionModel = self.getObservationDistribution(noisyDistance)
-				myPosition = gameState.getPosition()
+				myPosition = gameState.getAgentState(self.agent.index).getPosition()
 
 				allPossible = util.Counter()
 				if noisyDistance is None: # HANDLE THIS LATER
@@ -173,7 +186,7 @@ class ExactInference(InferenceModule):
 
 				else:
 						for p in self.legalPositions:
-								trueDistance = self.getMazeDistance(p, myPosition)
+								trueDistance = self.agent.getMazeDistance(p, myPosition)
 								probNoisyDistanceGivenTrueDistance = emissionModel[trueDistance]
 								
 								if emissionModel[trueDistance] > 0:
@@ -183,6 +196,7 @@ class ExactInference(InferenceModule):
 				self.beliefs = allPossible
 
 		def getBeliefDistribution(self):
+
 				return self.beliefs
 
 
@@ -237,19 +251,25 @@ class BustersAgent(CaptureAgent):
 				self.red = gameState.isOnRedTeam(self.index)
 				self.distancer = distanceCalculator.Distancer(gameState.data.layout)
 				self.distancer.getMazeDistances()
+				self.observe_enabled = False
 
 		def getAction(self, gameState): # without elapse time
 				"Updates beliefs, then chooses an action based on updated beliefs."
 				for index, inf in enumerate(self.inferenceModules):
 						self.opponentBeliefs[index] = inf.getBeliefDistribution()
-						inf.observeState(gameState)
-				self.displayDistributionsOverPositions(self.opponentBeliefs)
+						if self.observe_enabled:
+							inf.observeState(gameState)
+							print self.opponentBeliefs[index]
+							self.displayDistributionsOverPositions(self.opponentBeliefs)
+						else:
+							self.observe_enabled = True
+				#self.displayDistributionsOverPositions(self.opponentBeliefs)
 				return self.chooseAction(gameState)
 
 		def observationFunction(self, gameState):
 				"Removes the ghost states from the gameState"
-				agents = gameState.data.agentStates
-				gameState.data.agentStates = [agents[0]] + [None for i in range(1, len(agents))]
+				#agents = gameState.data.agentStates
+				#gameState.data.agentStates = [agents[0]] + [None for i in range(1, len(agents))]
 				return gameState
 
 		def chooseAction(self, gameState):
@@ -306,7 +326,7 @@ class GreedyBustersAgent(BustersAgent, CaptureAgent):
 						newMyPosition = Actions.getSuccessor(myPosition, candidateAction)            
 						newDist = self.getMazeDistance(newMyPosition, nearestOpponentPosition)
 						
-						print newDist
+						print "{} ... {} ...?".format(legal, newDist)
 						if newDist < minimalDistance:
 								minimalDistance = newDist
 								optimalAction = candidateAction
@@ -481,8 +501,72 @@ class HomogenousReflexAgent(ReflexCaptureAgent):
 						 'reverse': -2,\
 						 'teamDistance': 1}
 
-
 class MidfielderAgent(ReflexCaptureAgent):
+
+	def getFeatures(self, gameState, action):
+		features = util.Counter()
+		successor = self.getSuccessor(gameState, action)
+
+		foodList = self.getFood(successor).asList()    
+		ourFoodList = self.getFoodYouAreDefending(successor).asList()
+		myPos = successor.getAgentState(self.index).getPosition()
+
+		teams = [successor.getAgentState(i) for i in self.getTeam(successor) if i != self.index]
+		myTeamPos = teams[0].getPosition()
+		distToTeam = self.getMazeDistance(myPos, myTeamPos)
+
+		features['distanceToTeam'] = distToTeam
+		
+		enemies = [successor.getAgentState(i) for i in self.getOpponents(successor)]
+		invaders = [a for a in enemies if a.isPacman and a.getPosition() != None]
+		ghosts = [a for a in enemies if not a.isPacman and a.getPosition() != None]
+
+		features['numInvaders'] = len(invaders)
+		if len(invaders) > 0:
+			dists = [self.getMazeDistance(myPos, a.getPosition()) for a in invaders]
+			features['invaderDistance'] = min(dists)
+
+
+		features['numGhosts'] = len(ghosts)
+		if len(ghosts) > 0:
+			dists = [self.getMazeDistance(myPos, a.getPosition()) for a in ghosts]
+			features['ghostDistance'] = min(dists)
+
+		features['successorScore'] = -len(foodList)#self.getScore(successor)
+
+		# Compute distance to the nearest food
+
+		if len(foodList) > 0: # This should always be True,  but better safe than sorry
+			minDistance = min([self.getMazeDistance(myPos, food) for food in foodList])
+			features['distanceToFood'] = minDistance
+
+
+		if action == Directions.STOP: features['stop'] = 1
+		rev = Directions.REVERSE[gameState.getAgentState(self.index).configuration.direction]
+		if action == rev: features['reverse'] = 1
+
+		return features
+
+	def getWeights(self, gameState, action):
+		successor = self.getSuccessor(gameState, action)
+		foodList = self.getFood(successor).asList()    
+		ourFoodList = self.getFoodYouAreDefending(successor).asList()
+
+		if len(ourFoodList) < len(foodList):
+			defense_factor = 3
+		else:
+			defense_factor = 0
+
+		return {'successorScore': 100,\
+					 'distanceToFood': -5,\
+					 'invaderDistance': -10,# * defense_factor,
+					 'ghostDistance': 4,
+					 'stop': -100,
+					 'reverse': -100}
+
+
+
+class MidfielderAgent_old(ReflexCaptureAgent):
 	"""
 	A reflex agent that seeks food. This is an agent
 	we give you to get an idea of what an offensive agent might look like,
