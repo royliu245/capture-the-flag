@@ -64,7 +64,7 @@ class ReflexCaptureAgent(CaptureAgent):
 		
 		OFFENSIVE = True
 		DEFENSIVE = False
-		self.isOffensive = OFFENSIVE
+		self.isOffensive = True
 		self.touchHome = False
 		self.foodTotal = len(self.getFood(gameState).asList())
 		self.foodToReturn = 0
@@ -90,7 +90,10 @@ class ReflexCaptureAgent(CaptureAgent):
 		
 		#home_returning_condition = (foodLeft <= 2)
 		#home_returning_condition = (foodLeft <= 2) or (self.foodToReturn > 5)
-		carrying_food_threshold = 2
+		#carrying_food_threshold = 2
+		carrying_food_threshold = 4
+		carrying_food_threshold = int(7 * (float(foodLeft) / self.foodTotal))
+		#print carrying_food_threshold, foodLeft, self.foodTotal
 		home_returning_condition = (foodLeft <= 2) or\
 								 (self.foodToReturn > carrying_food_threshold and self.isOffensive)
 
@@ -222,7 +225,7 @@ class MidfielderAgent(ReflexCaptureAgent):
 				'reverse': -100}
 
 	def getOffensiveWeights(self, gameState, action):
-		return {'successorScore': 10,
+		return {'successorScore': 1,
 					 'distanceToFood': -2,
 					 'ghostDistance': 30,
 					 'stop': -10,
@@ -268,7 +271,6 @@ class TimidOffensiveReflexAgent(ReflexCaptureAgent):
 		return {'successorScore': 100, 
 				'distanceToFood': -1,
 				'ghostDistance': 2}
-
 
 class OriginalOffensiveReflexAgent(ReflexCaptureAgent):
 	"""
@@ -379,7 +381,7 @@ class RefinedDefensiveReflexAgent(ReflexCaptureAgent):
 	def getWeights(self, gameState, action):
 		return {'numInvaders': -1000,\
 						 'onDefense': 100,\
-						 'invaderDistance': -100,\
+						 'invaderDistance': -1000,\
 						 'stop': -100,\
 						 'reverse': -2}
 
