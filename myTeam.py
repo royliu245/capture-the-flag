@@ -33,15 +33,19 @@ from util import nearestPoint
 
 def createTeam(firstIndex, secondIndex, isRed,
 							 first = 'RefinedDefensiveReflexAgent', second = 'TimidOffensiveReflexAgent'):
-
+	
+	memberone = eval('HybridAgent')(firstIndex)
+	membertwo = eval('HybridAgent')(secondIndex, memberone)
+	
+	return [memberone, membertwo]
 	
 	def pair_team(first_agent, second_agent):
 		return [eval(first_agent)(firstIndex), eval(second_agent)(secondIndex)]
 
 	#version_one = pair_team('TimidOffensiveReflexAgent', 'RefinedDefensiveReflexAgent')
 
-	version_two = pair_team('SensorRefinedDefensiveReflexAgent', 'HybridAgent')
-	#version_two = pair_team('HybridAgent', 'HybridAgent')
+	#version_two = pair_team('SensorRefinedDefensiveReflexAgent', 'HybridAgent')
+	version_two = pair_team('HybridAgent', 'HybridAgent')
 
 
 
@@ -86,7 +90,7 @@ class HybridAgent(CaptureAgent):
 		self.legalpositions = self.getlegal(self.walls)
 
 		self.oldfood = self.getFoodYouAreDefending(gameState)
-		self.scared = False
+		self.scared = False # gameState.data.agentStates[self.index].scaredTimer
 		self.opponents = self.getOpponents(gameState)
 
 		self.initializebeliefs(gameState)
@@ -202,6 +206,7 @@ class HybridAgent(CaptureAgent):
 		return prob 
 
 	def getFeatures(self, gameState, action):
+		#print "getFeatures ... scaredTimer: {}".format(gameState.data.agentStates[self.index].scaredTimer)
 		features = util.Counter()
 		successor = self.getSuccessor(gameState, action)
 		foodList = self.getFood(successor).asList()    
@@ -213,42 +218,59 @@ class HybridAgent(CaptureAgent):
 		enemies = [successor.getAgentState(i) for i in self.getOpponents(successor)]
 		ghosts = [a for a in enemies if not a.isPacman and a.getPosition() != None]
 
+		# Computes distance to invaders we can see
+		invaders = [a for a in enemies if a.isPacman and a.getPosition() != None]
+		features['numInvaders'] = len(invaders)
+
 		features['successorScore'] = -len(foodList) #self.getScore(successor)
 
 		# Compute distance to the nearest food
-
-		if len(foodList) > 0: # This should always be True,  but better safe than sorry
+		if len(foodList) > 0: 
 			myPos = successor.getAgentState(self.index).getPosition()
 			minDistance = min([self.getMazeDistance(myPos, food) for food in foodList])
 			features['distanceToFood'] = minDistance
 
+		# Compute the number and distance to ghosts we can see
 		features['numGhosts'] = len(ghosts)
 		if len(ghosts) > 0:
 			dists = [self.getMazeDistance(myPos, a.getPosition()) for a in ghosts]
 			features['ghostDistance'] = min(dists)
 
-		if myState.isPacman:
-			features['ghostDistance'] *= (-1)
-
 		# get the sum probability of whether enemies will be there in the next state
 		features['enemyProbability'] = self.opponentProbabilityAt(myPos)
-
 
 		if action == Directions.STOP: features['stop'] = 1
 		rev = Directions.REVERSE[gameState.getAgentState(self.index).configuration.direction]
 		if action == rev: features['reverse'] = 1
 
-
+		# If currently on defense, chase the ghost; if on offense, do the opposite
+		
+		if gameState.getAgentState(self.index).isPacman:
+			features['ghostDistance'] *= (-1) 
+			features['enemyProbability'] *= (-1.0)
+		else:
+			features['numInvaders'] = 0
+		
 		
 		return features
 
 	def getWeights(self, gameState, action):
+		return {'successorScore': 10, 
+				'numInvaders': -10,
+				'distanceToFood': -1,
+				'ghostDistance': 2,
+				'enemyProbability': -100.0,
+				'stop': -100,
+				'reverse': -10}
+		"""
 		return {'successorScore': 100, 
+				'numInvaders': -1000,
 				'distanceToFood': -1,
 				'ghostDistance': -2,
 				'enemyProbability': -2,
 				'stop': -100,
 				'reverse': -10}
+		"""
 
 	def evaluate(self, gameState, action):
 		"""
@@ -259,6 +281,23 @@ class HybridAgent(CaptureAgent):
 		#print "evaluate : {}".format(features * weights)
 		return features * weights
 
+	def update_belief_from_communication(self):
+		new_beliefs = []
+		#print len(self.beliefs)
+		#print len(self.message)
+		#print zip(self.beliefs, self.message)
+		for belief_a, belief_b in zip(self.beliefs, self.message):
+			if not belief_a or not belief_b:
+				new_beliefs.append(None)
+				continue
+
+			new_belief = belief_a + belief_b
+			new_belief.normalize()
+			new_beliefs.append(new_belief)
+
+		self.beliefs = new_beliefs
+
+
 	def chooseAction(self, gameState):
 
 		actions = gameState.getLegalActions(self.index)
@@ -268,7 +307,7 @@ class HybridAgent(CaptureAgent):
 
 
 		#update beliefs from message
-		#self.beliefs = self.message
+		
 
 		for enemy in self.opponents:
 			# print "FOR {} in {}".format(enemy, self.opponents)
@@ -289,7 +328,7 @@ class HybridAgent(CaptureAgent):
 
 
 		self.communicate(self.teammates)
-
+		self.update_belief_from_communication()
 		
 		for enemy in self.opponents:
 			opponent_distribution = self.beliefs[enemy]
@@ -308,17 +347,24 @@ class HybridAgent(CaptureAgent):
 		####################################################
 		def chooseOffensiveAction(gameState):
 			values = [self.evaluate(gameState, a) for a in actions]
+			
 			# print 'eval time for agent %d: %.4f' % (self.index, time.time() - start)
 
 			foodLeft = len(self.getFood(gameState).asList())
 			ourFoodLeft = len(self.getFoodYouAreDefending(gameState).asList())
-			self.foodToReturn = self.foodTotal - self.getScore(gameState) - foodLeft
+			foodToReturn = self.foodTotal - self.getScore(gameState) - foodLeft
 			
-			carrying_food_threshold = 4
+			# As the game proceeds, the agent gets more conservative and timid
+			# and tries to fetch a fewer number of pellets
 			carrying_food_threshold = 4 * (float(foodLeft) / self.foodTotal)
-			#print carrying_food_threshold, foodLeft, self.foodTotal
-			home_returning_condition = (foodLeft <= 2) or\
-									 (self.foodToReturn > carrying_food_threshold and self.isOffensive)
+
+			winning_condition = foodLeft <= 2
+			carry_food_back_condition = self.isOffensive and (foodToReturn > carrying_food_threshold)
+			#time_running_out_condition = None 	
+
+			home_returning_condition = winning_condition \
+									or carry_food_back_condition\
+									
 
 			# If the opponents' food <= 2, go back to the origin
 			if home_returning_condition:
@@ -339,7 +385,23 @@ class HybridAgent(CaptureAgent):
 
 				return bestAction
 
+
 		def chooseDefensiveAction(gameState):
+			scared_condition = gameState.data.agentStates[self.index].scaredTimer > 25
+			#print scared_condition
+
+			if scared_condition:
+				bestDist = 9999
+				for action in actions:
+					successor = self.getSuccessor(gameState, action)
+					pos2 = successor.getAgentPosition(self.index)
+					dist = self.getMazeDistance(self.start,pos2)
+					if dist < bestDist:
+						bestAction = action
+						bestDist = dist
+				return bestAction
+
+
 			opponent_to_go = random.choice(self.opponents)
 			for i in self.getOpponents(gameState):
 				enemy = gameState.getAgentState(i)
@@ -347,7 +409,6 @@ class HybridAgent(CaptureAgent):
 					opponent_to_go = i
 
 			opponent_distribution = self.beliefs[opponent_to_go]
-
 			max_probability = 0
 			max_position = self.currentpos # or None?
 
@@ -377,13 +438,9 @@ class HybridAgent(CaptureAgent):
 
 		
 		if self.isOffensive:
-			#print "OFFENSIVE"
 			return chooseOffensiveAction(gameState)
-			#return chooseDefensiveAction(gameState)
 		else:
-			#print "DEFENSIVE"
 			return chooseDefensiveAction(gameState)
-			#return chooseDefensiveAction(gameState)
 
 		return random.choice(actions)
 
@@ -773,13 +830,21 @@ class SensorRefinedDefensiveReflexAgent(ReflexCaptureAgent):
 		return features
 
 	def getWeights(self, gameState, action):
-		return {'numInvaders': -1000000,\
+		a = {'numInvaders': -1000,\
+						 'onDefense': 100,\
+						 'invaderDistance': -1000,\
+						 'pacmanProbability': 100.0,
+						 'ghostProbability': -1000.0,
+						 'stop': -100,\
+						 'reverse': -2}
+
+		b = {'numInvaders': -1000,\
 						 'onDefense': 100000000,\
 						 'invaderDistance': -100,\
-						 'enemyProbability': 100,\
-						 'ghostProbability': -1000,\
-						 'stop': -10000,\
+						 'stop': -100,\
 						 'reverse': -2}
+
+		return b
 
 
 	def evaluate(self, gameState, action):
