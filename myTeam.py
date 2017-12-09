@@ -18,6 +18,7 @@ from game import Directions
 from game import Actions
 import game
 import capture
+import math
 
 ##
 
@@ -334,8 +335,9 @@ class HybridAgent(CaptureAgent):
 			else:
 				maxValue = max(values)
 				bestActions = [a for a, v in zip(actions, values) if v == maxValue]
+				bestAction = random.choice(bestActions)
 
-				return random.choice(bestActions)
+				return bestAction
 
 		def chooseDefensiveAction(gameState):
 			opponent_to_go = random.choice(self.opponents)
@@ -343,9 +345,6 @@ class HybridAgent(CaptureAgent):
 				enemy = gameState.getAgentState(i)
 				if enemy.isPacman:
 					opponent_to_go = i
-			#opponent_to_go = random.choice(self.opponents)
-			#print "Opponent to go: {}".format(opponent_to_go)
-			#opponent_to_go = self.opponents[0]
 
 			opponent_distribution = self.beliefs[opponent_to_go]
 
@@ -383,7 +382,7 @@ class HybridAgent(CaptureAgent):
 			#return chooseDefensiveAction(gameState)
 		else:
 			#print "DEFENSIVE"
-			return chooseOffensiveAction(gameState)
+			return chooseDefensiveAction(gameState)
 			#return chooseDefensiveAction(gameState)
 
 		return random.choice(actions)

@@ -197,10 +197,10 @@ class ParentAgent(CaptureAgent):
         #self.beliefs = self.message
 
         for enemy in self.opponents:
-            print "FOR {} in {}".format(enemy, self.opponents)
+            #print "FOR {} in {}".format(enemy, self.opponents)
             # check if we can observe any opponents and update beliefs accordingly
             if gameState.getAgentPosition(enemy) is not None:
-                print "DOESN'T THIS HAPPEN EVERY TIME?"
+                #print "DOESN'T THIS HAPPEN EVERY TIME?"
                 self.beliefs[enemy] = util.Counter()
                 self.beliefs[enemy][gameState.getAgentPosition(enemy)] = 1.0
             else:
@@ -233,7 +233,8 @@ class ParentAgent(CaptureAgent):
 
         for ghost in self.beliefs:
             if ghost is not None:
-                print ghost.totalCount()
+                pass
+                #print ghost.totalCount()
 
         self.displayDistributionsOverPositions(self.beliefs)
 
@@ -262,12 +263,12 @@ class ParentAgent(CaptureAgent):
             successorState = self.getSuccessor(gameState, action)
             myNextPosition = successorState.getAgentPosition(self.index)
             dist = self.getMazeDistance(myNextPosition, target_enemy_position)
-            print "Action {} :: dist from {} to {} is {}".format(action, myNextPosition, target_enemy_position, dist)
+            #print "Action {} :: dist from {} to {} is {}".format(action, myNextPosition, target_enemy_position, dist)
             if dist < bestDist:
                 bestAction = action
                 bestDist = dist
 
-        print bestAction
+        #print bestAction
         return bestAction
 
         return random.choice(actions)
