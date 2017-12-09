@@ -30,20 +30,21 @@ from util import nearestPoint
 # Team creation #
 #################
 
-
-V1_FIRST_AGENT = 'TimidOffensiveReflexAgent'
-V1_SECOND_AGENT = 'RefinedDefensiveReflexAgent'
-
 def createTeam(firstIndex, secondIndex, isRed,
-							 first = V1_FIRST_AGENT, second = V1_SECOND_AGENT):
+							 first = 'RefinedDefensiveReflexAgent', second = 'TimidOffensiveReflexAgent'):
 
 	
-	version_one = [eval(V1_FIRST_AGENT)(firstIndex),\
-					eval(V1_SECOND_AGENT)(secondIndex)]
+	def pair_team(first_agent, second_agent):
+		return [eval(first_agent)(firstIndex), eval(second_agent)(secondIndex)]
+
+	#version_one = pair_team('TimidOffensiveReflexAgent', 'RefinedDefensiveReflexAgent')
+
+	version_two = pair_team('SensorRefinedDefensiveReflexAgent', 'HybridAgent')
+	#version_two = pair_team('HybridAgent', 'HybridAgent')
 
 
 
-	return version_one
+	return version_two
 	
 
 
@@ -51,6 +52,341 @@ def createTeam(firstIndex, secondIndex, isRed,
 # Agents #
 ##########
 
+
+class HybridAgent(CaptureAgent):
+	"""
+	A Dummy agent to serve as an example of the necessary agent structure.
+	You should look at baselineTeam.py for more details about how to
+	create an agent as this is the bare minimum.
+	"""
+
+	def __init__(self, index, teammates = None, timeForComputing=.1):
+		CaptureAgent.__init__(self, index, timeForComputing)
+
+		self.teammates = []
+		if teammates is not None:
+			self.teammates.append(teammates)
+		for teammate in self.teammates:
+			if len(teammate.teammates) == 0:
+				teammate.teammates.append(self)
+
+
+
+	def registerInitialState(self, gameState):
+		CaptureAgent.registerInitialState(self, gameState)
+		self.numagents = gameState.getNumAgents()
+		self.start = gameState.getAgentPosition(self.index)
+		#self.myindex =
+		#self.mycolor =
+		self.distancer = distanceCalculator.Distancer(gameState.data.layout)
+		self.distancer.getMazeDistances()
+
+		self.walls = gameState.getWalls()
+		self.legalpositions = self.getlegal(self.walls)
+
+		self.oldfood = self.getFoodYouAreDefending(gameState)
+		self.scared = False
+		self.opponents = self.getOpponents(gameState)
+
+		self.initializebeliefs(gameState)
+		self.message = self.beliefs
+
+		self.observeEnabled = False
+		self.elapseEnabled = False
+
+		# Feature-based
+		self.isOffensive = True
+		self.touchHome = False
+		self.foodTotal = len(self.getFood(gameState).asList())
+		self.foodToReturn = 0
+
+
+
+
+	def getlegal(self, walls):
+		legal = []
+		for x in range(walls.width):
+			for y in range(walls.height):
+				if not walls[x][y]:
+					legal.append((x,y))
+		return legal
+
+	def initializebeliefs(self, gameState):
+		self.beliefs = [None] * self.numagents
+
+		for i in range(self.numagents):
+			if i in self.opponents:
+				self.beliefs[i] = util.Counter()
+				for pos in self.legalpositions:
+					self.beliefs[i][pos] = 1
+				self.beliefs[i].normalize()
+
+	def observe(self, gameState, agent):
+		allpossible = util.Counter()
+		read = self.distances[agent]
+		for pos in self.legalpositions:
+			true = util.manhattanDistance(pos, self.currentpos)
+			#true = self.getMazeDistance(pos, self.currentpos)
+			if gameState.getDistanceProb(true, read) > 0:
+				allpossible[pos] = gameState.getDistanceProb(true, read) * self.beliefs[agent][pos]
+		allpossible.normalize()
+		self.beliefs[agent] = allpossible
+
+	def elapse(self, gameState, agent):
+		allpossible = util.Counter()
+		for pos in self.legalpositions:
+			total = 1
+			possiblenew = [pos]
+			if (list(pos)[0]+1,list(pos)[1]) in self.legalpositions:
+				total += 1
+				possiblenew.append((list(pos)[0]+1, list(pos)[1]))
+			if (list(pos)[0],list(pos)[1]+1) in self.legalpositions:
+				total += 1
+				possiblenew.append((list(pos)[0], list(pos)[1]+1))
+			if (list(pos)[0]-1,list(pos)[1]) in self.legalpositions:
+				total += 1
+				possiblenew.append((list(pos)[0]-1, list(pos)[1]))
+			if (list(pos)[0],list(pos)[1]-1) in self.legalpositions:
+				total += 1
+				possiblenew.append((list(pos)[0], list(pos)[1]-1))
+
+			#print "POSSIBLE NEW: {}".format(possiblenew)
+
+			for new in possiblenew:
+				if new in allpossible:
+					allpossible[new] = allpossible[new] + (1/float(total)) * self.beliefs[agent][pos]
+				else:
+					allpossible[new] = (1/float(total)) * self.beliefs[agent][pos]
+		allpossible.normalize()
+		self.beliefs[agent] = allpossible
+
+	def checkeat(self, gameState):
+		cord = None
+		newfood = self.getFoodYouAreDefending(gameState)
+		if newfood != self.oldfood:
+			print(newfood.packBits())
+		self.oldfood = newfood
+		#print cord
+		return cord
+
+	def getfeats(self, gameState):
+		feats = util.Counter()
+		#feats['scared']
+		pass
+
+	def communicate(self, teammates):
+		for member in teammates:
+			member.message = self.beliefs
+
+	def getSuccessor(self, gameState, action):
+		"""
+		Finds the next successor which is a grid position (location tuple).
+		"""
+		successor = gameState.generateSuccessor(self.index, action)
+		pos = successor.getAgentState(self.index).getPosition()
+		if pos != nearestPoint(pos):
+			# Only half a grid position was covered
+			return successor.generateSuccessor(self.index, action)
+		else:
+			return successor
+
+	#################################################
+	# FEATURE-BASED PART
+	#################################################
+
+	def opponentProbabilityAt(self, pos):
+		prob = 0
+		for enemy in self.opponents:
+			prob += self.beliefs[enemy][pos]
+		return prob 
+
+	def getFeatures(self, gameState, action):
+		features = util.Counter()
+		successor = self.getSuccessor(gameState, action)
+		foodList = self.getFood(successor).asList()    
+		ourFoodList = self.getFoodYouAreDefending(successor).asList()
+		# next state and position
+		myState = successor.getAgentState(self.index)
+		myPos = myState.getPosition()
+
+		enemies = [successor.getAgentState(i) for i in self.getOpponents(successor)]
+		ghosts = [a for a in enemies if not a.isPacman and a.getPosition() != None]
+
+		features['successorScore'] = -len(foodList) #self.getScore(successor)
+
+		# Compute distance to the nearest food
+
+		if len(foodList) > 0: # This should always be True,  but better safe than sorry
+			myPos = successor.getAgentState(self.index).getPosition()
+			minDistance = min([self.getMazeDistance(myPos, food) for food in foodList])
+			features['distanceToFood'] = minDistance
+
+		features['numGhosts'] = len(ghosts)
+		if len(ghosts) > 0:
+			dists = [self.getMazeDistance(myPos, a.getPosition()) for a in ghosts]
+			features['ghostDistance'] = min(dists)
+
+		if myState.isPacman:
+			features['ghostDistance'] *= (-1)
+
+		# get the sum probability of whether enemies will be there in the next state
+		features['enemyProbability'] = self.opponentProbabilityAt(myPos)
+
+
+		if action == Directions.STOP: features['stop'] = 1
+		rev = Directions.REVERSE[gameState.getAgentState(self.index).configuration.direction]
+		if action == rev: features['reverse'] = 1
+
+
+		
+		return features
+
+	def getWeights(self, gameState, action):
+		return {'successorScore': 100, 
+				'distanceToFood': -1,
+				'ghostDistance': -2,
+				'enemyProbability': -2,
+				'stop': -100,
+				'reverse': -10}
+
+	def evaluate(self, gameState, action):
+		"""
+		Computes a linear combination of features and feature weights
+		"""
+		features = self.getFeatures(gameState, action)
+		weights = self.getWeights(gameState, action)
+		#print "evaluate : {}".format(features * weights)
+		return features * weights
+
+	def chooseAction(self, gameState):
+
+		actions = gameState.getLegalActions(self.index)
+		self.currentstate = gameState.getAgentState(self.index)
+		self.currentpos = self.currentstate.getPosition()
+		self.distances = gameState.getAgentDistances()
+
+
+		#update beliefs from message
+		#self.beliefs = self.message
+
+		for enemy in self.opponents:
+			# print "FOR {} in {}".format(enemy, self.opponents)
+			# check if we can observe any opponents and update beliefs accordingly
+			if gameState.getAgentPosition(enemy) is not None:
+			#	print "DOESN'T THIS HAPPEN EVERY TIME?"
+				self.beliefs[enemy] = util.Counter()
+				self.beliefs[enemy][gameState.getAgentPosition(enemy)] = 1.0
+			if self.observeEnabled and self.elapseEnabled:
+				# elapse time for last agent (if not observable)
+				#if enemy == (self.index - 1) % 4:
+				self.elapse(gameState, enemy)
+				# update based on reading for each agent (if not observable)
+				self.observe(gameState, enemy)
+			else:
+				self.observeEnabled = True
+				self.elapseEnabled = True
+
+
+		self.communicate(self.teammates)
+
+		
+		for enemy in self.opponents:
+			opponent_distribution = self.beliefs[enemy]
+
+			if opponent_distribution.totalCount() == 0:
+				self.initializebeliefs(gameState)
+
+		"""
+		for ghost in self.beliefs:
+			if ghost is not None:
+				print ghost.totalCount()
+		"""
+
+		self.displayDistributionsOverPositions(self.beliefs)
+
+		####################################################
+		def chooseOffensiveAction(gameState):
+			values = [self.evaluate(gameState, a) for a in actions]
+			# print 'eval time for agent %d: %.4f' % (self.index, time.time() - start)
+
+			foodLeft = len(self.getFood(gameState).asList())
+			ourFoodLeft = len(self.getFoodYouAreDefending(gameState).asList())
+			self.foodToReturn = self.foodTotal - self.getScore(gameState) - foodLeft
+			
+			carrying_food_threshold = 4
+			carrying_food_threshold = 4 * (float(foodLeft) / self.foodTotal)
+			#print carrying_food_threshold, foodLeft, self.foodTotal
+			home_returning_condition = (foodLeft <= 2) or\
+									 (self.foodToReturn > carrying_food_threshold and self.isOffensive)
+
+			# If the opponents' food <= 2, go back to the origin
+			if home_returning_condition:
+				bestDist = 9999
+				for action in actions:
+					successor = self.getSuccessor(gameState, action)
+					pos2 = successor.getAgentPosition(self.index)
+					dist = self.getMazeDistance(self.start,pos2)
+					if dist < bestDist:
+						bestAction = action
+						bestDist = dist
+				return bestAction
+
+			else:
+				maxValue = max(values)
+				bestActions = [a for a, v in zip(actions, values) if v == maxValue]
+
+				return random.choice(bestActions)
+
+		def chooseDefensiveAction(gameState):
+			opponent_to_go = random.choice(self.opponents)
+			for i in self.getOpponents(gameState):
+				enemy = gameState.getAgentState(i)
+				if enemy.isPacman:
+					opponent_to_go = i
+			#opponent_to_go = random.choice(self.opponents)
+			#print "Opponent to go: {}".format(opponent_to_go)
+			#opponent_to_go = self.opponents[0]
+
+			opponent_distribution = self.beliefs[opponent_to_go]
+
+			max_probability = 0
+			max_position = self.currentpos # or None?
+
+			for candidate_position, candidate_probability in opponent_distribution.items():
+				if candidate_probability > max_probability:
+					max_probability = candidate_probability
+					max_position = candidate_position
+
+			bestDist = 9999
+
+			target_enemy_position = max_position
+			for action in actions:
+				successorState = self.getSuccessor(gameState, action)
+				myNextPosition = successorState.getAgentPosition(self.index)
+				dist = self.getMazeDistance(myNextPosition, target_enemy_position)
+				#print "Action {} :: dist from {} to {} is {}".format(action, myNextPosition, target_enemy_position, dist)
+				if dist < bestDist:
+					bestAction = action
+					bestDist = dist
+
+			#print bestAction
+			return bestAction
+
+
+		#####################################################
+		self.isOffensive = gameState.getAgentState(self.index).isPacman
+
+		
+		if self.isOffensive:
+			#print "OFFENSIVE"
+			return chooseOffensiveAction(gameState)
+			#return chooseDefensiveAction(gameState)
+		else:
+			#print "DEFENSIVE"
+			return chooseOffensiveAction(gameState)
+			#return chooseDefensiveAction(gameState)
+
+		return random.choice(actions)
 
 
 
@@ -247,6 +583,291 @@ class RefinedDefensiveReflexAgent(ReflexCaptureAgent):
 						 'stop': -100,\
 						 'reverse': -2}
 
+
+class SensorRefinedDefensiveReflexAgent(ReflexCaptureAgent):
+	"""
+	A reflex agent that keeps its side Pacman-free. Again,
+	this is to give you an idea of what a defensive agent
+	could be like.  It is not the best or only way to make
+	such an agent.
+	"""
+	def __init__(self, index, teammates = None, timeForComputing=.1):
+		CaptureAgent.__init__(self, index, timeForComputing)
+
+		self.teammates = []
+		if teammates is not None:
+			self.teammates.append(teammates)
+		for teammate in self.teammates:
+			if len(teammate.teammates) == 0:
+				teammate.teammates.append(self)
+
+
+	def registerInitialState(self, gameState):
+		ReflexCaptureAgent.registerInitialState(self, gameState)
+		self.isOffensive = False
+
+		CaptureAgent.registerInitialState(self, gameState)
+		self.numagents = gameState.getNumAgents()
+		self.start = gameState.getAgentPosition(self.index)
+		#self.myindex =
+		#self.mycolor =
+		self.distancer = distanceCalculator.Distancer(gameState.data.layout)
+		self.distancer.getMazeDistances()
+
+		self.walls = gameState.getWalls()
+		self.legalpositions = self.getlegal(self.walls)
+
+		self.oldfood = self.getFoodYouAreDefending(gameState)
+		self.scared = False
+		self.opponents = self.getOpponents(gameState)
+
+		self.initializebeliefs(gameState)
+		self.message = self.beliefs
+
+		self.observeEnabled = False
+		self.elapseEnabled = False
+
+		# Feature-based
+		self.touchHome = False
+		self.foodTotal = len(self.getFood(gameState).asList())
+		self.foodToReturn = 0
+
+
+	def getlegal(self, walls):
+		legal = []
+		for x in range(walls.width):
+			for y in range(walls.height):
+				if not walls[x][y]:
+					legal.append((x,y))
+		return legal
+
+	def initializebeliefs(self, gameState):
+		self.beliefs = [None] * self.numagents
+
+		for i in range(self.numagents):
+			if i in self.opponents:
+				self.beliefs[i] = util.Counter()
+				for pos in self.legalpositions:
+					self.beliefs[i][pos] = 1
+				self.beliefs[i].normalize()
+
+	def observe(self, gameState, agent):
+		allpossible = util.Counter()
+		read = self.distances[agent]
+		for pos in self.legalpositions:
+			true = util.manhattanDistance(pos, self.currentpos)
+			#true = self.getMazeDistance(pos, self.currentpos)
+			if gameState.getDistanceProb(true, read) > 0:
+				allpossible[pos] = gameState.getDistanceProb(true, read) * self.beliefs[agent][pos]
+		allpossible.normalize()
+		self.beliefs[agent] = allpossible
+
+	def elapse(self, gameState, agent):
+		allpossible = util.Counter()
+		for pos in self.legalpositions:
+			total = 1
+			possiblenew = [pos]
+			if (list(pos)[0]+1,list(pos)[1]) in self.legalpositions:
+				total += 1
+				possiblenew.append((list(pos)[0]+1, list(pos)[1]))
+			if (list(pos)[0],list(pos)[1]+1) in self.legalpositions:
+				total += 1
+				possiblenew.append((list(pos)[0], list(pos)[1]+1))
+			if (list(pos)[0]-1,list(pos)[1]) in self.legalpositions:
+				total += 1
+				possiblenew.append((list(pos)[0]-1, list(pos)[1]))
+			if (list(pos)[0],list(pos)[1]-1) in self.legalpositions:
+				total += 1
+				possiblenew.append((list(pos)[0], list(pos)[1]-1))
+
+			#print "POSSIBLE NEW: {}".format(possiblenew)
+
+			for new in possiblenew:
+				if new in allpossible:
+					allpossible[new] = allpossible[new] + (1/float(total)) * self.beliefs[agent][pos]
+				else:
+					allpossible[new] = (1/float(total)) * self.beliefs[agent][pos]
+		allpossible.normalize()
+		self.beliefs[agent] = allpossible
+
+	def checkeat(self, gameState):
+		cord = None
+		newfood = self.getFoodYouAreDefending(gameState)
+		if newfood != self.oldfood:
+			print(newfood.packBits())
+		self.oldfood = newfood
+		#print cord
+		return cord
+
+	def getfeats(self, gameState):
+		feats = util.Counter()
+		#feats['scared']
+		pass
+
+	def communicate(self, teammates):
+		for member in teammates:
+			member.message = self.beliefs
+
+	def getSuccessor(self, gameState, action):
+		"""
+		Finds the next successor which is a grid position (location tuple).
+		"""
+		successor = gameState.generateSuccessor(self.index, action)
+		pos = successor.getAgentState(self.index).getPosition()
+		if pos != nearestPoint(pos):
+			# Only half a grid position was covered
+			return successor.generateSuccessor(self.index, action)
+		else:
+			return successor
+
+	def pacmanProbabilityAt(self, gameState, pos):
+		prob = 0
+		for enemy in self.opponents:
+			if gameState.getAgentState(enemy).isPacman:
+				prob += self.beliefs[enemy][pos] 
+		return prob 
+
+	def ghostProbabilityAt(self, gameState, pos):
+		prob = 0
+		for enemy in self.opponents:
+			if not gameState.getAgentState(enemy).isPacman:
+				prob += self.beliefs[enemy][pos] 
+		return prob 
+
+	def getFeatures(self, gameState, action):
+		features = util.Counter()
+		successor = self.getSuccessor(gameState, action)
+
+		myState = successor.getAgentState(self.index)
+		myPos = myState.getPosition()
+
+		# Computes whether we're on defense (1) or offense (0)
+		features['onDefense'] = 1
+		if myState.isPacman: 
+			features['onDefense'] = 0
+
+		# Computes distance to invaders we can see
+		enemies = [successor.getAgentState(i) for i in self.getOpponents(successor)]
+		invaders = [a for a in enemies if a.isPacman and a.getPosition() != None]
+		#print a
+		#print invaders
+
+
+		features['numInvaders'] = len(invaders)
+		if len(invaders) > 0:
+			dists = [self.getMazeDistance(myPos, a.getPosition()) for a in invaders]
+			###########################################################
+			#print self.getCurrentObservation()
+			#distributions = [None]
+			#self.displayDistributionsOverPositions(distributions)
+			features['invaderDistance'] = min(dists)
+
+
+		features['pacmanProbability'] = self.opponentProbabilityAt(gameState, myPos)
+		features['ghostProbability'] = self.ghostProbabilityAt(gameState, myPos)
+
+
+		if action == Directions.STOP: features['stop'] = 1
+		rev = Directions.REVERSE[gameState.getAgentState(self.index).configuration.direction]
+		if action == rev: features['reverse'] = 1
+
+		return features
+
+	def getWeights(self, gameState, action):
+		return {'numInvaders': -1000000,\
+						 'onDefense': 100000000,\
+						 'invaderDistance': -100,\
+						 'enemyProbability': 100,\
+						 'ghostProbability': -1000,\
+						 'stop': -10000,\
+						 'reverse': -2}
+
+
+	def evaluate(self, gameState, action):
+		"""
+		Computes a linear combination of features and feature weights
+		"""
+		features = self.getFeatures(gameState, action)
+		weights = self.getWeights(gameState, action)
+		#print "evaluate : {}".format(features * weights)
+		return features * weights
+
+	def chooseAction(self, gameState):
+
+		actions = gameState.getLegalActions(self.index)
+		self.currentstate = gameState.getAgentState(self.index)
+		self.currentpos = self.currentstate.getPosition()
+		self.distances = gameState.getAgentDistances()
+
+
+		#update beliefs from message
+		#self.beliefs = self.message
+
+		for enemy in self.opponents:
+			# print "FOR {} in {}".format(enemy, self.opponents)
+			# check if we can observe any opponents and update beliefs accordingly
+			if gameState.getAgentPosition(enemy) is not None:
+			#	print "DOESN'T THIS HAPPEN EVERY TIME?"
+				self.beliefs[enemy] = util.Counter()
+				self.beliefs[enemy][gameState.getAgentPosition(enemy)] = 1.0
+			if self.observeEnabled and self.elapseEnabled:
+				# elapse time for last agent (if not observable)
+				#if enemy == (self.index - 1) % 4:
+				self.elapse(gameState, enemy)
+				# update based on reading for each agent (if not observable)
+				self.observe(gameState, enemy)
+			else:
+				self.observeEnabled = True
+				self.elapseEnabled = True
+
+
+		self.communicate(self.teammates)
+
+		
+		for enemy in self.opponents:
+			opponent_distribution = self.beliefs[enemy]
+
+			if opponent_distribution.totalCount() == 0:
+				self.initializebeliefs(gameState)
+
+		opponent_to_go = random.choice(self.opponents)
+		for i in self.getOpponents(gameState):
+			enemy = gameState.getAgentState(i)
+			if enemy.isPacman:
+				opponent_to_go = i
+		#opponent_to_go = random.choice(self.opponents)
+		#print "Opponent to go: {}".format(opponent_to_go)
+		#opponent_to_go = self.opponents[0]
+
+		opponent_distribution = self.beliefs[opponent_to_go]
+
+		max_probability = 0
+		max_position = self.currentpos # or None?
+
+		for candidate_position, candidate_probability in opponent_distribution.items():
+			if candidate_probability > max_probability:
+				max_probability = candidate_probability
+				max_position = candidate_position
+
+		bestDist = 9999
+
+		target_enemy_position = max_position
+		for action in actions:
+			successorState = self.getSuccessor(gameState, action)
+			myNextPosition = successorState.getAgentPosition(self.index)
+			dist = self.getMazeDistance(myNextPosition, target_enemy_position)
+			#print "Action {} :: dist from {} to {} is {}".format(action, myNextPosition, target_enemy_position, dist)
+			if dist < bestDist:
+				bestAction = action
+				bestDist = dist
+
+		#print bestAction
+		return bestAction
+		"""
+		for ghost in self.beliefs:
+			if ghost is not None:
+				print ghost.totalCount()
+		"""
 
 
 
