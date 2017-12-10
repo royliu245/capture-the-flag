@@ -382,11 +382,17 @@ class HybridAgent(CaptureAgent):
 			ourFoodLeft = len(self.getFoodYouAreDefending(gameState).asList())
 			foodToReturn = self.foodTotal - self.getScore(gameState) - foodLeft
 			
+			currentPos = gameState.getAgentState(self.index).getPosition()
+			opponent_is_nearby = True # to be conservative
+			#opponent_is_nearby = (self.getDistanceToNearestOpponent(currentPos) < 15)
+
 			# As the game proceeds, the agent gets more conservative and timid
 			# and tries to fetch a fewer number of pellets
 			winning_condition = foodLeft <= 2
-			carrying_food_threshold = 4 * (float(foodLeft) / self.foodTotal)
-			carry_food_back_condition = self.isOffensive and (foodToReturn > carrying_food_threshold)
+			carrying_food_threshold = 3 * (float(foodLeft) / self.foodTotal)
+			carry_food_back_condition = self.isOffensive and\
+										 (foodToReturn > carrying_food_threshold) and\
+										 opponent_is_nearby
 			#time_running_out_condition = None 	
 
 			home_returning_condition = winning_condition \
