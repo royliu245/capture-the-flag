@@ -303,13 +303,13 @@ class HybridAgent(CaptureAgent):
 		
 		#if gameState.getAgentState(self.index).isPacman:
 		if myState.isPacman:
-			features['distanceOpponent'] *= (-1) 
+			features['distanceOpponent'] *= (-1.0) 
 		
 		return features
 
 	def getWeights(self, gameState, action):
 		return {'successorScore': 10, 
-				'imminentDanger': -100,
+				'imminentDanger': -300,
 				'distanceToFood': -0.4,
 				'distanceToHome': -0.1,
 				'distanceOpponent': -0.3,
